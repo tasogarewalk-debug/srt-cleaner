@@ -197,31 +197,44 @@ export default function Home() {
 
       {/* ── HEADER ── */}
       <header style={s.header}>
-        <div style={s.headerInner}>
+        <div style={{
+          ...s.headerInner,
+          height: isMobile ? "auto" : 64,
+          padding: isMobile ? "10px 16px" : "0 32px",
+          flexWrap: "wrap" as const,
+        }}>
+          {/* ブランド */}
           <div style={s.brand}>
             <div style={s.brandName}>SRT Cleaner</div>
-            <div style={s.brandSub}>{t.brandSub}</div>
+            {!isMobile && <div style={s.brandSub}>{t.brandSub}</div>}
           </div>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            {/* 言語切り替え */}
+          {/* 右側 */}
+          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" as const }}>
             <div style={s.langSwitch}>
               {(["ja","en"] as Lang[]).map(l => (
                 <button key={l} onClick={() => handleLangChange(l)}
-                  style={{ ...s.langBtn, ...(lang === l ? s.langBtnOn : {}) }}>
-                  {l === "ja" ? "🇯🇵 日本語" : "🇺🇸 English"}
+                  style={{ ...s.langBtn, ...(lang === l ? s.langBtnOn : {}), padding: isMobile ? "5px 8px" : "5px 12px" }}>
+                  {l === "ja" ? (isMobile ? "🇯🇵" : "🇯🇵 日本語") : (isMobile ? "🇺🇸" : "🇺🇸 English")}
                 </button>
               ))}
             </div>
-            {/* ナビ - 固定幅エリアの右端に配置 */}
-            <div style={{ width:280, display:"flex", justifyContent:"flex-start", gap:8 }}>
+            <div style={{ display:"flex", gap:6 }}>
               {section !== "clean" && (
-                <button onClick={() => setSection("clean")} style={navBtnStyle()}>
-                  {t.toClean}
+                <button onClick={() => setSection("clean")} style={{
+                  ...navBtnStyle(),
+                  fontSize: isMobile ? 11 : 13,
+                  padding: isMobile ? "6px 10px" : "8px 18px",
+                }}>
+                  {isMobile ? (lang === "ja" ? "整形" : "Clean") : t.toClean}
                 </button>
               )}
               {section !== "rules" && (
-                <button onClick={() => setSection("rules")} style={navBtnStyle()}>
-                  {t.toRules}
+                <button onClick={() => setSection("rules")} style={{
+                  ...navBtnStyle(),
+                  fontSize: isMobile ? 11 : 13,
+                  padding: isMobile ? "6px 10px" : "8px 18px",
+                }}>
+                  {isMobile ? (lang === "ja" ? "ルール" : "Rules") : t.toRules}
                   {enabledRuleCount > 0 && <span style={s.navBadge}>{enabledRuleCount}</span>}
                 </button>
               )}
