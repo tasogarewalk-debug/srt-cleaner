@@ -274,7 +274,7 @@ export default function Home() {
             <div style={s.optBox}>
               <span style={s.optBoxLabel}>{t.optLabel}</span>
               <div style={s.optGrid}>
-                {(["notation","filler","linebreak","customRules"] as (keyof CleanOptions)[]).map(key => {
+                {(["notation","filler","linebreak","customRules"] as const).map(key => {
                   const opt = t.opts[key];
                   const on = options[key];
                   const desc = key === "customRules"
