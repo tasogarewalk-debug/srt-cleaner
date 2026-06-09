@@ -234,7 +234,7 @@ export default function Home() {
                   fontSize: isMobile ? 11 : 13,
                   padding: isMobile ? "6px 10px" : "8px 18px",
                 }}>
-                  {isMobile ? (lang === "ja" ? "ルール" : "Rules") : t.toRules}
+                  {isMobile ? (lang === "ja" ? "カスタムルール" : "Custom Rules") : t.toRules}
                   {enabledRuleCount > 0 && <span style={s.navBadge}>{enabledRuleCount}</span>}
                 </button>
               )}
