@@ -79,7 +79,7 @@ export default function Home() {
   const [lang, setLang]           = useState<Lang>("en");
   const [customRules, setCustomRules] = useState<CustomRule[]>([]);
   const [options, setOptions] = useState<CleanOptions>({
-    notation: true, filler: true, linebreak: true, customRules: true,
+    notation: true, filler: true, linebreak: true, customRules: false,
     linebreakChars: 42,
     maxLines: 0,
   });
@@ -275,46 +275,45 @@ export default function Home() {
                     ? (lang === "ja" ? `${options.linebreakChars}文字で折り返し` : `${options.linebreakChars} chars/line`)
                     : opt.desc;
                   return (
-                    <div key={key} style={{ ...s.optItem, ...(key === "customRules" ? { gridColumn: "1 / -1" } : {}) }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:12, width:"100%", cursor:"pointer" }}
-                        onClick={() => setOptions(o => ({ ...o, [key]: !o[key] }))}>
-                        <div style={{ width:40, height:22, borderRadius:11, flexShrink:0,
-                          background: on ? "#2b6cb0" : "#d1d5db",
-                          position:"relative", transition:"background 0.2s", cursor:"pointer" }}>
-                          <div style={{ width:16, height:16, borderRadius:"50%", background:"#fff",
-                            position:"absolute", top:3, left: on ? 21 : 3,
-                            transition:"left 0.2s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)" }} />
-                        </div>
-                        <div style={{ flex:1 }}>
-                          <div style={{ fontSize:13, fontWeight:600, color: on ? "var(--text)" : "var(--text-2)" }}>{opt.label}</div>
-                          <div style={{ fontSize:11, color:"var(--text-3)", marginTop:1 }}>{desc}</div>
-                        </div>
+                    <div key={key} style={s.optItem}
+                      onClick={() => setOptions(o => ({ ...o, [key]: !o[key] }))}>
+                      <div style={{ width:40, height:22, borderRadius:11, flexShrink:0,
+                        background: on ? "#2b6cb0" : "#d1d5db",
+                        position:"relative", transition:"background 0.2s", cursor:"pointer" }}>
+                        <div style={{ width:16, height:16, borderRadius:"50%", background:"#fff",
+                          position:"absolute", top:3, left: on ? 21 : 3,
+                          transition:"left 0.2s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)" }} />
                       </div>
-                      {key === "customRules" && on && (
-                        <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--border)" }}
-                          onClick={e => e.stopPropagation()}>
-                          <div style={s.exampleRow}>
-                            <span style={s.exampleLabel}>{t.exampleLabel}</span>
-                            {(lang === "en"
-                              ? [["gonna","going to"],["ur","your"],["wanna","want to"],["pls","please"]]
-                              : [["Youtube","YouTube"],["フジタ","藤田"],["弊社","当社"],["笑","（笑）"]]
-                            ).map(([f,tt]) => (
-                              <span key={f} style={s.examplePill}>
-                                <span style={{ color:"var(--red)", fontWeight:700 }}>{f}</span>
-                                <span style={{ color:"var(--text-3)" }}>→</span>
-                                <span style={{ color:"var(--teal-dark)", fontWeight:700 }}>{tt}</span>
-                              </span>
-                            ))}
-                          </div>
-                          <RuleManager rules={customRules} onChange={handleRulesChange} lang={lang} />
-                        </div>
-                      )}
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:13, fontWeight:600, color: on ? "var(--text)" : "var(--text-2)" }}>{opt.label}</div>
+                        <div style={{ fontSize:11, color:"var(--text-3)", marginTop:1 }}>{desc}</div>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
 
+
+            {/* CUSTOM RULES BOX */}
+            {options.customRules && (
+              <div style={s.sliderBox}>
+                <div style={s.exampleRow}>
+                  <span style={s.exampleLabel}>{t.exampleLabel}</span>
+                  {(lang === "en"
+                    ? [["gonna","going to"],["ur","your"],["wanna","want to"],["pls","please"]]
+                    : [["Youtube","YouTube"],["フジタ","藤田"],["弊社","当社"],["笑","（笑）"]]
+                  ).map(([f,tt]) => (
+                    <span key={f} style={s.examplePill}>
+                      <span style={{ color:"var(--red)", fontWeight:700 }}>{f}</span>
+                      <span style={{ color:"var(--text-3)" }}>→</span>
+                      <span style={{ color:"var(--teal-dark)", fontWeight:700 }}>{tt}</span>
+                    </span>
+                  ))}
+                </div>
+                <RuleManager rules={customRules} onChange={handleRulesChange} lang={lang} />
+              </div>
+            )}
 
             {/* LINEBREAK SLIDERS */}
             {options.linebreak && (
