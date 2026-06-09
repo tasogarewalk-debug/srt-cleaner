@@ -220,7 +220,7 @@ export default function Home() {
       <main style={s.main}>
 
         {/* ════ 整形セクション ════ */}
-        {section === "clean" && (
+        {(
           <div style={s.stack}>
 
             {/* DROP ZONE */}
