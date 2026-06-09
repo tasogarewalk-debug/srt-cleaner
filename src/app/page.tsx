@@ -68,14 +68,11 @@ Um so anyway let's get into the actual tutorial and i'll show you exactly what I
 Um thank you so much for watching i'll see you in the next video and don't forget to subscribe`;
 
 type Tab = "diff" | "output" | "input";
-type Section = "clean" | "rules";
-
 export default function Home() {
   const [input, setInput]         = useState("");
   const [output, setOutput]       = useState("");
   const [diff, setDiff]           = useState<DiffBlock[]>([]);
   const [tab, setTab]             = useState<Tab>("diff");
-  const [section, setSection]     = useState<Section>("clean");
   const [dragging, setDragging]   = useState(false);
   const [fileName, setFileName]   = useState("");
   const [processed, setProcessed] = useState(false);
@@ -208,37 +205,14 @@ export default function Home() {
             <div style={s.brandName}>SRT Cleaner</div>
             {!isMobile && <div style={s.brandSub}>{t.brandSub}</div>}
           </div>
-          {/* 右側 */}
-          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" as const }}>
-            <div style={s.langSwitch}>
-              {(["ja","en"] as Lang[]).map(l => (
-                <button key={l} onClick={() => handleLangChange(l)}
-                  style={{ ...s.langBtn, ...(lang === l ? s.langBtnOn : {}), padding: isMobile ? "5px 8px" : "5px 12px" }}>
-                  {l === "ja" ? (isMobile ? "🇯🇵" : "🇯🇵 日本語") : (isMobile ? "🇺🇸" : "🇺🇸 English")}
-                </button>
-              ))}
-            </div>
-            <div style={{ display:"flex", gap:6 }}>
-              {section !== "clean" && (
-                <button onClick={() => setSection("clean")} style={{
-                  ...navBtnStyle(),
-                  fontSize: isMobile ? 11 : 13,
-                  padding: isMobile ? "6px 10px" : "8px 18px",
-                }}>
-                  {isMobile ? (lang === "ja" ? "整形" : "Clean") : t.toClean}
-                </button>
-              )}
-              {section !== "rules" && (
-                <button onClick={() => setSection("rules")} style={{
-                  ...navBtnStyle(),
-                  fontSize: isMobile ? 11 : 13,
-                  padding: isMobile ? "6px 10px" : "8px 18px",
-                }}>
-                  {isMobile ? (lang === "ja" ? "カスタムルール" : "Custom Rules") : t.toRules}
-                  {enabledRuleCount > 0 && <span style={s.navBadge}>{enabledRuleCount}</span>}
-                </button>
-              )}
-            </div>
+          {/* 言語切り替え */}
+          <div style={s.langSwitch}>
+            {(["ja","en"] as Lang[]).map(l => (
+              <button key={l} onClick={() => handleLangChange(l)}
+                style={{ ...s.langBtn, ...(lang === l ? s.langBtnOn : {}), padding: isMobile ? "5px 8px" : "5px 12px" }}>
+                {l === "ja" ? (isMobile ? "🇯🇵 JP" : "🇯🇵 日本語") : (isMobile ? "🇺🇸 EN" : "🇺🇸 English")}
+              </button>
+            ))}
           </div>
         </div>
       </header>
@@ -301,19 +275,40 @@ export default function Home() {
                     ? (lang === "ja" ? `${options.linebreakChars}文字で折り返し` : `${options.linebreakChars} chars/line`)
                     : opt.desc;
                   return (
-                    <div key={key} style={s.optItem}
-                      onClick={() => setOptions(o => ({ ...o, [key]: !o[key] }))}>
-                      <div style={{ width:40, height:22, borderRadius:11, flexShrink:0,
-                        background: on ? "#2b6cb0" : "#d1d5db",
-                        position:"relative", transition:"background 0.2s", cursor:"pointer" }}>
-                        <div style={{ width:16, height:16, borderRadius:"50%", background:"#fff",
-                          position:"absolute", top:3, left: on ? 21 : 3,
-                          transition:"left 0.2s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)" }} />
+                    <div key={key} style={{ ...s.optItem, ...(key === "customRules" ? { gridColumn: "1 / -1" } : {}) }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:12, width:"100%", cursor:"pointer" }}
+                        onClick={() => setOptions(o => ({ ...o, [key]: !o[key] }))}>
+                        <div style={{ width:40, height:22, borderRadius:11, flexShrink:0,
+                          background: on ? "#2b6cb0" : "#d1d5db",
+                          position:"relative", transition:"background 0.2s", cursor:"pointer" }}>
+                          <div style={{ width:16, height:16, borderRadius:"50%", background:"#fff",
+                            position:"absolute", top:3, left: on ? 21 : 3,
+                            transition:"left 0.2s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)" }} />
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontSize:13, fontWeight:600, color: on ? "var(--text)" : "var(--text-2)" }}>{opt.label}</div>
+                          <div style={{ fontSize:11, color:"var(--text-3)", marginTop:1 }}>{desc}</div>
+                        </div>
                       </div>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:13, fontWeight:600, color: on ? "var(--text)" : "var(--text-2)" }}>{opt.label}</div>
-                        <div style={{ fontSize:11, color:"var(--text-3)", marginTop:1 }}>{desc}</div>
-                      </div>
+                      {key === "customRules" && on && (
+                        <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--border)" }}
+                          onClick={e => e.stopPropagation()}>
+                          <div style={s.exampleRow}>
+                            <span style={s.exampleLabel}>{t.exampleLabel}</span>
+                            {(lang === "en"
+                              ? [["gonna","going to"],["ur","your"],["wanna","want to"],["pls","please"]]
+                              : [["Youtube","YouTube"],["フジタ","藤田"],["弊社","当社"],["笑","（笑）"]]
+                            ).map(([f,tt]) => (
+                              <span key={f} style={s.examplePill}>
+                                <span style={{ color:"var(--red)", fontWeight:700 }}>{f}</span>
+                                <span style={{ color:"var(--text-3)" }}>→</span>
+                                <span style={{ color:"var(--teal-dark)", fontWeight:700 }}>{tt}</span>
+                              </span>
+                            ))}
+                          </div>
+                          <RuleManager rules={customRules} onChange={handleRulesChange} lang={lang} />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -487,27 +482,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ════ カスタムルールセクション ════ */}
-        {section === "rules" && (
-          <div style={s.rulesCard}>
-            <h2 style={s.rulesTitle}>{t.rulesTitle}</h2>
-            <p style={s.rulesDesc}>{t.rulesDesc}</p>
-            <div style={s.exampleRow}>
-              <span style={s.exampleLabel}>{t.exampleLabel}</span>
-              {(lang === "en"
-              ? [["gonna","going to"],["ur","your"],["wanna","want to"],["pls","please"]]
-              : [["Youtube","YouTube"],["フジタ","藤田"],["弊社","当社"],["笑","（笑）"]]
-            ).map(([f,tt]) => (
-                <span key={f} style={s.examplePill}>
-                  <span style={{ color:"var(--red)", fontWeight:700 }}>{f}</span>
-                  <span style={{ color:"var(--text-3)" }}>→</span>
-                  <span style={{ color:"var(--teal-dark)", fontWeight:700 }}>{tt}</span>
-                </span>
-              ))}
-            </div>
-            <RuleManager rules={customRules} onChange={handleRulesChange} lang={lang} />
-          </div>
-        )}
+
       </main>
 
       <footer style={s.footer}>
