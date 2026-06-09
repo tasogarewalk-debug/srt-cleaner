@@ -88,6 +88,7 @@ export default function Home() {
   });
   const [showChangedOnly, setShowChangedOnly] = useState(true);
   const [diffLimit, setDiffLimit] = useState(100);
+  const [isMobile, setIsMobile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -95,6 +96,10 @@ export default function Home() {
     const savedLang = loadLang();
     setLang(savedLang);
     setOptions(o => ({ ...o, linebreakChars: savedLang === "ja" ? 18 : 42 }));
+    const checkMobile = () => setIsMobile(window.innerWidth < 640);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
   const t = UI[lang];
@@ -273,7 +278,7 @@ export default function Home() {
             {/* OPTIONS */}
             <div style={s.optBox}>
               <span style={s.optBoxLabel}>{t.optLabel}</span>
-              <div style={s.optGrid}>
+              <div style={{ ...s.optGrid, gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr" }}>
                 {(["notation","filler","linebreak","customRules"] as const).map(key => {
                   const opt = t.opts[key];
                   const on = options[key];
@@ -492,7 +497,16 @@ export default function Home() {
         )}
       </main>
 
-      <footer style={s.footer}>{t.footer}</footer>
+      <footer style={s.footer}>
+        <span>{t.footer}</span>
+        <span style={{ color:"var(--border-2)" }}>·</span>
+        <a
+          href={lang === "ja" ? "https://x.com/negitoroedamame" : "https://x.com/Matsuya_dev"}
+          target="_blank" rel="noopener noreferrer"
+          style={{ color:"#2b6cb0", fontWeight:600, textDecoration:"none", fontSize:11 }}>
+          {lang === "ja" ? "@negitoroedamame" : "@Matsuya_dev"}
+        </a>
+      </footer>
     </div>
   );
 }
@@ -500,6 +514,7 @@ export default function Home() {
 const s: Record<string, React.CSSProperties> = {
   header: { background:"#fff", borderBottom:"1.5px solid var(--border)", boxShadow:"0 1px 8px rgba(0,0,0,0.06)", position:"sticky", top:0, zIndex:50 },
   headerInner: { maxWidth:900, margin:"0 auto", height:64, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, padding:"0 32px" },
+  headerInnerMobile: { height:"auto", padding:"10px 16px", gap:8 },
   brand: { display:"flex", alignItems:"center", gap:12 },
   brandIcon: { width:36, height:36, background:"linear-gradient(135deg,#2b6cb0,#2d9e8e)", borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 },
   brandName: { fontSize:20, fontWeight:700, letterSpacing:"-0.02em", color:"var(--text)" },
@@ -552,5 +567,5 @@ const s: Record<string, React.CSSProperties> = {
   exampleRow: { display:"flex", flexWrap:"wrap", gap:8, alignItems:"center", marginBottom:24, padding:"12px 16px", background:"var(--bg-3)", borderRadius:"var(--radius-sm)" },
   exampleLabel: { fontSize:11, color:"var(--text-3)", fontWeight:500 },
   examplePill: { display:"flex", gap:6, fontSize:13, alignItems:"center", background:"#fff", borderRadius:999, padding:"3px 12px", border:"1px solid var(--border)" },
-  footer: { textAlign:"center", padding:"18px", fontSize:11, color:"var(--text-3)", borderTop:"1.5px solid var(--border)", background:"#fff" },
+  footer: { textAlign:"center", padding:"18px", fontSize:11, color:"var(--text-3)", borderTop:"1.5px solid var(--border)", background:"#fff", display:"flex", justifyContent:"center", alignItems:"center", gap:10, flexWrap:"wrap" as const },
 };
