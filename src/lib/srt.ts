@@ -53,7 +53,8 @@ export interface CleanResult {
 
 // BOM除去とCRLF→LF正規化（Windows製SRT対応）
 export function normalizeText(text: string): string {
-  return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  // \u7A7A\u767D\u3060\u3051\u306E\u884C\u3082\u7A7A\u884C\u306B\u6B63\u898F\u5316\u3059\u308B\uFF08\u6C5A\u3044SRT\u3067\u30D6\u30ED\u30C3\u30AF\u533A\u5207\u308A\u304C\u58CA\u308C\u306A\u3044\u3088\u3046\u306B\uFF09
+  return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").replace(/^[ \t]+$/gm, "");
 }
 
 // 拡張子とWEBVTTヘッダで入力フォーマットを自動判定
@@ -67,8 +68,9 @@ export function detectFormat(text: string, fileName?: string): SubFormat {
 // タイムスタンプ
 // ==========================================
 
-// SRT（00:00:01,000）とVTT（00:01.000 — ドット区切り・時間部省略可）の両対応
-const TIME_RE = /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
+// SRT（00:00:01,000）とVTT（00:01.000 — ドット区切り・時間部省略可）の両対応。
+// 時間部は3桁以上（100時間超の収録）も許容する
+const TIME_RE = /(?:(\d{1,4}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
 
 export function parseTime(s: string): number | null {
   const m = TIME_RE.exec(s);
@@ -126,6 +128,7 @@ export function parseCues(raw: string, format: SubFormat): Cue[] {
     const settings = (endPart ?? "").slice(endMatch.index + endMatch[0].length).trim();
 
     const content = lines.slice(tcIdx + 1).join("\n").trim();
+    // 元から本文が空のキューはこの時点で捨てる（差分のdeleted表示は「整形で空になったもの」のみが対象）
     if (!content) continue;
     cues.push({ startMs, endMs, settings, content });
   }
@@ -217,9 +220,11 @@ const NOTATION_RULES_EN: NotationRule[] = [
 // フィラーワード（言語別・強度別）
 // ==========================================
 
-// 日本語は誤爆リスクが低いため標準・強力共通
+// 日本語は標準・強力共通。
+// 「まあ[ーあ]」「なんか[ーあ]?」は次の単語の頭文字を食う（例:「なんかあった？」→「った？」）ため、
+// 長音付きの形だけを対象にする。素の「なんか」「まあ」は意味を持つ用法があるので削除しない
 const FILLER_PATTERN_JA =
-  /(?:えーっと|えっと|えーと|あのー|あのう|あの[ーう]|そのー|そのう|うーんと|まあ[ーあ]|なんか[ーあ]?)[、。,，.．ー\s]*/g;
+  /(?:えーっと|えっと|えーと|あの[ーう]|そのー|そのう|うーんと|まあー|なんかー)[、。,，.．ー\s]*/g;
 
 // 標準: 確実なフィラーのみ。長い語を先に並べる（|は左から先にマッチするため、
 // 短い語が先だと "uh-huh" の前半だけ消えて "-huh" が残る）。先頭・末尾とも \b で単語境界を守る
@@ -339,8 +344,8 @@ function applyCustomRules(text: string, rules: CustomRule[]): string {
     if (!rule.enabled || !rule.from.trim()) continue;
     const escaped = rule.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(escaped, "g");
-    // URL内は置換しない
-    result = replaceOutsideURLs(result, (seg) => seg.replace(re, rule.to));
+    // URL内は置換しない。置換先は関数で渡し、$&等が特殊解釈されないようにする
+    result = replaceOutsideURLs(result, (seg) => seg.replace(re, () => rule.to));
   }
   return result;
 }
@@ -483,7 +488,13 @@ export function loadRules(): CustomRule[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(RULES_KEY);
-    return raw ? (JSON.parse(raw) as CustomRule[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    // 壊れたデータが1件混ざっただけでクラッシュしないよう、形が正しいものだけ通す
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((r): r is CustomRule =>
+      !!r && typeof r === "object" &&
+      typeof (r as CustomRule).from === "string" && typeof (r as CustomRule).to === "string"
+    );
   } catch { return []; }
 }
 
@@ -494,7 +505,9 @@ export function saveRules(rules: CustomRule[]): void {
 
 export function loadLang(): Lang {
   if (typeof window === "undefined") return "ja";
-  return (localStorage.getItem(LANG_KEY) as Lang) ?? "ja";
+  // 不正な値が保存されていてもクラッシュしないよう検証してから返す
+  const v = localStorage.getItem(LANG_KEY);
+  return v === "ja" || v === "en" ? v : "ja";
 }
 
 export function saveLang(lang: Lang): void {
@@ -548,7 +561,7 @@ export const UI = {
     fillerStandard:     "標準",
     fillerStrong:       "強力",
     fillerStandardDesc: "um, uh など確実なフィラーのみ",
-    fillerStrongDesc:   "like, so, actually なども削除（意味が変わることがあります）",
+    fillerStrongDesc:   "like, so, actually なども削除 ⚠️ 文意が変わることがあります。差分の確認を推奨",
     cleanBtn:      "整形する",
     recleanMsg:    "整形完了 — オプションやルールを変えて再整形できます",
     recleanBtn:    "再整形する",
@@ -587,7 +600,7 @@ export const UI = {
     fillerStandard:     "Standard",
     fillerStrong:       "Strong",
     fillerStandardDesc: "Only clear fillers: um, uh, er…",
-    fillerStrongDesc:   "Also like, so, actually… (may change meaning)",
+    fillerStrongDesc:   "Also like, so, actually… ⚠️ may change meaning — review the diff",
     cleanBtn:      "Clean Subtitles",
     recleanMsg:    "Done — change options or rules and re-clean",
     recleanBtn:    "Re-clean",

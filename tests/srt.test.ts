@@ -156,6 +156,23 @@ const optNot: CleanOptions = { ...OPT_OFF, notation: true };
   assert("改行: 文字欠落なし", lines.join("") === "東京から大阪まで新幹線で移動しました今日はとても楽しかったです", lines);
 }
 
+// ===== レビュー指摘の回帰テスト =====
+{
+  // 日本語フィラーが次の単語の頭文字を食わない
+  assert("JA: なんかあった？は無傷", cleanOne("なんかあった？", optStd, "ja") === "なんかあった？", cleanOne("なんかあった？", optStd, "ja"));
+  assert("JA: まあまあです無傷", cleanOne("まあまあです", optStd, "ja") === "まあまあです", cleanOne("まあまあです", optStd, "ja"));
+  assert("JA: なんかー削除", cleanOne("なんかー今日はいい天気", optStd, "ja") === "今日はいい天気", cleanOne("なんかー今日はいい天気", optStd, "ja"));
+  // 空白だけの区切り行でもブロック分割される
+  const dirty = "1\n00:00:01,000 --> 00:00:02,000\nhello\n \n2\n00:00:03,000 --> 00:00:04,000\nworld";
+  assert("空白入り空行: 2キューに分割", parseCues(dirty, "srt").length === 2, parseCues(dirty, "srt"));
+  // カスタムルールの置換先で$&が特殊解釈されない
+  const dollarRule = { id: "x", from: "yen", to: "$&100", enabled: true, createdAt: 0 };
+  const res = cleanSubtitles("1\n00:00:01,000 --> 00:00:02,000\n100 yen", { ...OPT_OFF, customRules: true }, [dollarRule], "en", "srt");
+  assert("カスタムルール: $&そのまま", res.cues[0]?.content === "100 $&100", res.cues[0]?.content);
+  // 3桁時間のタイムコード
+  assert("parseTime: 100時間", parseTime("100:00:01,000") === 360001000, parseTime("100:00:01,000"));
+}
+
 // ===== replaceOutsideURLs =====
 {
   const out = replaceOutsideURLs("foo twitter.com bar", s => s.toUpperCase());

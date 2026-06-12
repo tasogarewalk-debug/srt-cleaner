@@ -139,6 +139,9 @@ export default function Home() {
       setFormat(detectFormat(text, file.name));
       setInput(text);
       setProcessed(false); setOutput(""); setDiff([]);
+    }).catch((err) => {
+      console.error("ファイル読み込みに失敗しました", err);
+      setFileName("");
     });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -427,6 +430,13 @@ export default function Home() {
                   </div>
                 </div>
 
+                {/* ブロック削除は編集者に重要な事象なので目立つバナーで知らせる */}
+                {deletedCount > 0 && (
+                  <div style={{ padding:"10px 20px", background:"var(--red-bg)", color:"var(--red)", fontSize:13, fontWeight:600, borderBottom:"1.5px solid var(--border)" }}>
+                    ⚠️ {t.deletedMsg(deletedCount)}
+                  </div>
+                )}
+
                 {/* TABS */}
                 <div style={s.tabBar}>
                   <div style={{ display:"flex", gap:4 }}>
@@ -453,7 +463,6 @@ export default function Home() {
                         {lang === "ja"
                           ? `全${diff.length}ブロック中 ${changedCount}件変更`
                           : `${changedCount} of ${diff.length} blocks changed`}
-                        {deletedCount > 0 && ` · ${t.deletedMsg(deletedCount)}`}
                       </span>
                       {/* セグメントコントロール */}
                       <div style={{ display:"flex", background:"var(--border)", borderRadius:8, padding:2, gap:2 }}>

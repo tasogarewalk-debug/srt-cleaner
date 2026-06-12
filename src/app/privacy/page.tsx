@@ -58,7 +58,8 @@ export default function PrivacyPage() {
       <div style={block}>
         <h2 style={h2}>お問い合わせ</h2>
         <p style={p}>
-          X（旧Twitter）<a href="https://x.com/negitoroedamame" target="_blank" rel="noopener noreferrer" style={{ color: "#2b6cb0" }}>@negitoroedamame</a>
+          X（旧Twitter）<a href="https://x.com/negitoroedamame" target="_blank" rel="noopener noreferrer" style={{ color: "#2b6cb0" }}>@negitoroedamame</a>（日本語）
+          / <a href="https://x.com/Matsuya_dev" target="_blank" rel="noopener noreferrer" style={{ color: "#2b6cb0" }}>@Matsuya_dev</a>（English）
           までご連絡ください。
         </p>
       </div>
