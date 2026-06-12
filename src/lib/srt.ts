@@ -3,10 +3,14 @@
 // ==========================================
 
 export type Lang = "ja" | "en";
+export type SubFormat = "srt" | "vtt";
+export type FillerMode = "off" | "standard" | "strong";
 
-export interface SRTBlock {
-  index: string;
-  timecode: string;
+// フォーマット非依存の字幕キュー（SRT/VTT共通の内部表現）
+export interface Cue {
+  startMs: number;   // 開始時刻（ミリ秒）
+  endMs: number;     // 終了時刻（ミリ秒）
+  settings: string;  // タイムコード行の終了時刻より後ろの付加情報（VTTのposition等）を素通しで保持
   content: string;
 }
 
@@ -20,7 +24,7 @@ export interface CustomRule {
 
 export interface CleanOptions {
   notation: boolean;
-  filler: boolean;
+  fillerMode: FillerMode;
   linebreak: boolean;
   customRules: boolean;
   linebreakChars: number; // 1行あたりの最大文字数
@@ -28,54 +32,169 @@ export interface CleanOptions {
 }
 
 export interface DiffBlock {
-  index: string;
+  index: number;     // 出力上の連番（deletedは元の位置の番号）
   timecode: string;
   before: string;
   after: string;
-  changed: boolean;
+  kind: "unchanged" | "changed" | "split" | "deleted";
+}
+
+// 整形結果（出力テキストと差分を同じ構造から生成し、番号ズレを防ぐ）
+export interface CleanResult {
+  cues: Cue[];
+  blocks: DiffBlock[];
+  deletedCount: number; // 整形で中身が空になり削除されたブロック数
+  text: string;         // 入力と同じフォーマットの出力テキスト
 }
 
 // ==========================================
-// SRTパース
+// テキスト正規化・フォーマット判定
 // ==========================================
 
-export function parseSRT(text: string): SRTBlock[] {
-  const blocks = text.trim().split(/\n\n+/);
-  return blocks
-    .map((block) => {
-      const lines = block.split("\n");
-      const index = lines[0]?.trim() ?? "";
-      const timecode = lines[1]?.trim() ?? "";
-      const content = lines.slice(2).join("\n").trim();
-      return { index, timecode, content };
-    })
-    .filter((b) => b.index && b.timecode && b.content);
+// BOM除去とCRLF→LF正規化（Windows製SRT対応）
+export function normalizeText(text: string): string {
+  return text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }
 
-export function blocksToSRT(blocks: SRTBlock[]): string {
-  return blocks
-    .map((b) => `${b.index}\n${b.timecode}\n${b.content}`)
+// 拡張子とWEBVTTヘッダで入力フォーマットを自動判定
+export function detectFormat(text: string, fileName?: string): SubFormat {
+  if (fileName && /\.vtt$/i.test(fileName)) return "vtt";
+  if (/^\uFEFF?WEBVTT/.test(text.trimStart())) return "vtt";
+  return "srt";
+}
+
+// ==========================================
+// タイムスタンプ
+// ==========================================
+
+// SRT（00:00:01,000）とVTT（00:01.000 — ドット区切り・時間部省略可）の両対応
+const TIME_RE = /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
+
+export function parseTime(s: string): number | null {
+  const m = TIME_RE.exec(s);
+  if (!m) return null;
+  const h = parseInt(m[1] ?? "0", 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3], 10);
+  const ms = parseInt(m[4].padEnd(3, "0"), 10);
+  return ((h * 60 + min) * 60 + sec) * 1000 + ms;
+}
+
+export function formatTime(totalMs: number, format: SubFormat): string {
+  const ms = Math.max(0, Math.round(totalMs));
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const frac = ms % 1000;
+  const sep = format === "vtt" ? "." : ",";
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(frac, 3)}`;
+}
+
+// 差分表示用のタイムコード行文字列
+export function timecodeOf(cue: Cue, format: SubFormat): string {
+  const line = `${formatTime(cue.startMs, format)} --> ${formatTime(cue.endMs, format)}`;
+  return cue.settings ? `${line} ${cue.settings}` : line;
+}
+
+// ==========================================
+// パース・出力
+// ==========================================
+
+export function parseCues(raw: string, format: SubFormat): Cue[] {
+  const text = normalizeText(raw);
+  const blocks = text.split(/\n{2,}/);
+  const cues: Cue[] = [];
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const first = lines.find((l) => l.trim() !== "")?.trim() ?? "";
+    // VTTのヘッダ・メタブロックはスキップ
+    if (/^(WEBVTT|NOTE|STYLE|REGION)\b/.test(first) || first === "WEBVTT") continue;
+
+    // 「-->」を含む行をタイムコード行とみなす（VTTはキューID省略可のため行位置で判定しない）
+    const tcIdx = lines.findIndex((l) => l.includes("-->"));
+    if (tcIdx === -1) continue;
+
+    const [startPart, endPart] = lines[tcIdx].split("-->");
+    const startMs = parseTime(startPart);
+    const endMatch = TIME_RE.exec(endPart ?? "");
+    if (startMs === null || !endMatch) continue;
+    const endMs = parseTime(endMatch[0]);
+    if (endMs === null) continue;
+    // 終了時刻より後ろのキュー設定（VTTのposition:等）は素通しで保持
+    const settings = (endPart ?? "").slice(endMatch.index + endMatch[0].length).trim();
+
+    const content = lines.slice(tcIdx + 1).join("\n").trim();
+    if (!content) continue;
+    cues.push({ startMs, endMs, settings, content });
+  }
+  return cues;
+}
+
+// 連番は出力時に1から振り直す（SRT規格準拠）
+export function cuesToText(cues: Cue[], format: SubFormat): string {
+  const body = cues
+    .map((c, i) => `${i + 1}\n${timecodeOf(c, format)}\n${c.content}`)
     .join("\n\n");
+  return (format === "vtt" ? "WEBVTT\n\n" : "") + body + "\n";
+}
+
+// ==========================================
+// URLガード（URL内のテキストを置換対象から除外する）
+// ==========================================
+
+// http(s)://... と twitter.com のようなスキームなしドメインの両方を退避する
+const URL_RE = /https?:\/\/\S+|\b[\w-]+(?:\.[a-zA-Z][\w-]*)+(?:\/\S*)?/g;
+
+export function replaceOutsideURLs(text: string, fn: (seg: string) => string): string {
+  let result = "";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((m = URL_RE.exec(text)) !== null) {
+    result += fn(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return result + fn(text.slice(last));
 }
 
 // ==========================================
 // 表記統一ルール（言語別）
 // ==========================================
 
-const NOTATION_RULES_JA: { pattern: RegExp; replacement: string }[] = [
-  { pattern: /youtube|YOUTUBE|ユーチューブ/gi, replacement: "YouTube" },
-  { pattern: /twitter|TWITTER|ツイッター/gi,   replacement: "X（旧Twitter）" },
-  { pattern: /instagram|INSTAGRAM|インスタグラム/gi, replacement: "Instagram" },
-  { pattern: /tiktok|TIKTOK|ティックトック/gi, replacement: "TikTok" },
+type NotationRule = {
+  pattern: RegExp;
+  replacement: string | ((match: string, offset: number, str: string) => string);
+};
+
+const NOTATION_RULES_JA: NotationRule[] = [
+  { pattern: /youtube|ユーチューブ/gi, replacement: "YouTube" },
+  {
+    pattern: /twitter|ツイッター/gi,
+    // 既に「X（旧Twitter）」へ変換済みの箇所は再変換しない（再整形しても結果が変わらないように）
+    replacement: (m: string, offset: number, str: string) =>
+      str.slice(Math.max(0, offset - 2), offset) === "（旧" ? "Twitter" : "X（旧Twitter）",
+  },
+  { pattern: /instagram|インスタグラム/gi, replacement: "Instagram" },
+  { pattern: /tiktok|ティックトック/gi, replacement: "TikTok" },
   { pattern: /出来る/g,   replacement: "できる" },
   { pattern: /出来ない/g, replacement: "できない" },
   { pattern: /いう事/g,   replacement: "ということ" },
   { pattern: /宜しく/g,   replacement: "よろしく" },
   { pattern: /有り難う/g, replacement: "ありがとう" },
-  { pattern: /笑(?!顔|い|う|え|お|声|み)/g, replacement: "（笑）" },
+  {
+    // 文末の「笑」だけを（笑）にする。「爆笑」「苦笑」などの熟語は対象外
+    pattern: /笑+$/gm,
+    replacement: (m: string, offset: number, str: string) => {
+      const prev = str[offset - 1] ?? "";
+      if ("爆苦微失嘲冷大半談（".includes(prev)) return m;
+      return "（笑）";
+    },
+  },
 ];
 
-const NOTATION_RULES_EN: { pattern: RegExp; replacement: string }[] = [
+const NOTATION_RULES_EN: NotationRule[] = [
   { pattern: /youtube/gi,   replacement: "YouTube" },
   { pattern: /instagram/gi, replacement: "Instagram" },
   { pattern: /tiktok/gi,    replacement: "TikTok" },
@@ -84,25 +203,55 @@ const NOTATION_RULES_EN: { pattern: RegExp; replacement: string }[] = [
   { pattern: /iphone/gi,    replacement: "iPhone" },
   { pattern: /ipad/gi,      replacement: "iPad" },
   { pattern: /macbook/gi,   replacement: "MacBook" },
-  { pattern: /\bi\s+am\b/gi,   replacement: "I am" },
-  { pattern: /\bi\s+was\b/gi,  replacement: "I was" },
-  { pattern: /\bi\s+will\b/gi, replacement: "I will" },
-  { pattern: /\bi\s+have\b/gi, replacement: "I have" },
-  { pattern: /\bi['']ve\b/gi,  replacement: "I've" },
-  { pattern: /\bi['']m\b/gi,   replacement: "I'm" },
-  { pattern: /\bi['']ll\b/gi,  replacement: "I'll" },
-  { pattern: /\bi['']d\b/gi,   replacement: "I'd" },
+  { pattern: /\bi\s+am\b/g,   replacement: "I am" },
+  { pattern: /\bi\s+was\b/g,  replacement: "I was" },
+  { pattern: /\bi\s+will\b/g, replacement: "I will" },
+  { pattern: /\bi\s+have\b/g, replacement: "I have" },
+  { pattern: /\bi['’]ve\b/g,  replacement: "I've" },
+  { pattern: /\bi['’]m\b/g,   replacement: "I'm" },
+  { pattern: /\bi['’]ll\b/g,  replacement: "I'll" },
+  { pattern: /\bi['’]d\b/g,   replacement: "I'd" },
 ];
 
 // ==========================================
-// フィラーワード（言語別）
+// フィラーワード（言語別・強度別）
 // ==========================================
 
+// 日本語は誤爆リスクが低いため標準・強力共通
 const FILLER_PATTERN_JA =
   /(?:えーっと|えっと|えーと|あのー|あのう|あの[ーう]|そのー|そのう|うーんと|まあ[ーあ]|なんか[ーあ]?)[、。,，.．ー\s]*/g;
 
-const FILLER_PATTERN_EN =
-  /\b(?:um+|uh+|er+|hmm+|mhm|uh-huh|you know|I mean|like(?=\s+\w)|basically|literally|actually(?=\s+\w)|so(?=\s+\w)|okay so|well(?=\s+\w)|like I said|you see|you know what I mean|at the end of the day|to be honest|to be fair|right so|anyway so|and stuff|or whatever)[,，.．\s]*/gi;
+// 標準: 確実なフィラーのみ。長い語を先に並べる（|は左から先にマッチするため、
+// 短い語が先だと "uh-huh" の前半だけ消えて "-huh" が残る）。先頭・末尾とも \b で単語境界を守る
+const FILLER_STANDARD_EN =
+  /\b(?:uh-huh|hmm+|mhm|um+|uh+|er+)\b[,，.．\s]*/gi;
+
+// 強力（追加分1）: 談話標識のフレーズ。単語単位の誤爆がないものだけ \b で囲んで削除
+const FILLER_STRONG_PHRASES_EN =
+  /\b(?:you know what I mean|at the end of the day|to be honest|to be fair|like I said|I mean|you know|you see|okay so|right so|anyway so|and stuff|or whatever|basically|literally)\b[,，.．\s]*/gi;
+
+// 強力（追加分2）: like / so / well / actually は語義を持つため、
+// 文頭またはカンマ等の区切り直後＋直後にカンマがある場合のみ削除（"I like this" などを守る）
+const FILLER_STRONG_DISCOURSE_EN =
+  /(^|[.!?,]\s+|\n)(?:like|so|well|actually)[,，]\s*/gim;
+
+function removeFillers(content: string, lang: Lang, mode: FillerMode): string {
+  if (mode === "off") return content;
+  if (lang === "ja") return content.replace(FILLER_PATTERN_JA, "");
+
+  let result = content.replace(FILLER_STANDARD_EN, "");
+  if (mode === "strong") {
+    result = result
+      .replace(FILLER_STRONG_PHRASES_EN, "")
+      .replace(FILLER_STRONG_DISCOURSE_EN, "$1");
+  }
+  // 文頭のフィラーが削除された場合だけ、先頭を大文字に戻す
+  // （元テキストの末尾と一致する＝先頭側だけが削られた、と判定。何も削っていない文は触らない）
+  if (result !== content && content.trim().endsWith(result.trim()) && /^[a-z]/.test(result.trimStart())) {
+    result = result.replace(/^(\s*)([a-z])/, (_, sp, c) => sp + c.toUpperCase());
+  }
+  return result;
+}
 
 // ==========================================
 // 改行最適化（言語別）
@@ -117,12 +266,13 @@ function splitLineJA(line: string, maxChars: number, depth = 0): string[] {
     return [line.slice(0, mid), line.slice(mid)];
   }
   const mid = Math.floor(line.length / 2);
-  const breakPattern = /[をにはがでもとのへやからまで、]/g;
+  // 2文字助詞（から・まで）も正しく扱うため文字クラスではなく選択肢で書く
+  const breakPattern = /から|まで|[をにはがでもとのへや、]/g;
   let bestPos = -1;
   let bestDiff = Infinity;
   let match: RegExpExecArray | null;
   while ((match = breakPattern.exec(line)) !== null) {
-    const pos = match.index + 1;
+    const pos = match.index + match[0].length;
     const diff = Math.abs(pos - mid);
     if (diff < bestDiff && pos > 2 && pos < line.length - 2) {
       bestDiff = diff; bestPos = pos;
@@ -188,38 +338,99 @@ function applyCustomRules(text: string, rules: CustomRule[]): string {
   for (const rule of rules) {
     if (!rule.enabled || !rule.from.trim()) continue;
     const escaped = rule.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    result = result.replace(new RegExp(escaped, "g"), rule.to);
+    const re = new RegExp(escaped, "g");
+    // URL内は置換しない
+    result = replaceOutsideURLs(result, (seg) => seg.replace(re, rule.to));
   }
   return result;
+}
+
+// ==========================================
+// 最大行数による分割（タイムコード比例配分）
+// ==========================================
+
+const MIN_CHUNK_MS = 500; // 1チャンクの最低表示時間
+
+function splitCueByMaxLines(cue: Cue, maxLines: number): Cue[] {
+  const lines = cue.content.split("\n");
+  if (maxLines <= 0 || lines.length <= maxLines) return [cue];
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < lines.length; i += maxLines) {
+    chunks.push(lines.slice(i, i + maxLines));
+  }
+
+  const dur = cue.endMs - cue.startMs;
+  // 文字数（空白・改行除く）の累積比で境界時刻を決める。
+  // チャンクごとに独立で丸めると誤差が累積するため、必ず累積比率から計算する
+  const weights = chunks.map((ch) => ch.join("").replace(/\s/g, "").length || 1);
+  const total = weights.reduce((a, b) => a + b, 0);
+
+  let bounds: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < chunks.length - 1; i++) {
+    acc += weights[i];
+    bounds.push(cue.startMs + Math.round((dur * acc) / total));
+  }
+
+  // 比例配分で極端に短いチャンクができる場合は均等割りにフォールバック
+  const all = [cue.startMs, ...bounds, cue.endMs];
+  const tooShort = all.some((b, i) => i > 0 && b - all[i - 1] < MIN_CHUNK_MS);
+  if (tooShort) {
+    bounds = [];
+    for (let i = 1; i < chunks.length; i++) {
+      bounds.push(cue.startMs + Math.round((dur * i) / chunks.length));
+    }
+  }
+
+  const starts = [cue.startMs, ...bounds];
+  const ends = [...bounds, cue.endMs]; // 最終チャンクの終了は元の終了時刻にピン留め
+  return chunks.map((ch, i) => ({
+    startMs: starts[i],
+    endMs: ends[i],
+    settings: i === 0 ? cue.settings : "",
+    content: ch.join("\n"),
+  }));
 }
 
 // ==========================================
 // メイン整形処理
 // ==========================================
 
-export function cleanSRT(
-  text: string,
+export function cleanSubtitles(
+  raw: string,
   options: CleanOptions,
   customRules: CustomRule[] = [],
-  lang: Lang = "ja"
-): string {
-  const blocks = parseSRT(text);
+  lang: Lang = "ja",
+  format: SubFormat = "srt"
+): CleanResult {
+  const sourceCues = parseCues(raw, format);
   const notationRules = lang === "en" ? NOTATION_RULES_EN : NOTATION_RULES_JA;
-  const fillerPattern = lang === "en" ? FILLER_PATTERN_EN : FILLER_PATTERN_JA;
   const lineBreakFn   = lang === "en" ? optimizeLineBreakEN : optimizeLineBreakJA;
 
-  const cleaned = blocks.map((block) => {
-    let content = block.content;
+  const outCues: Cue[] = [];
+  const blocks: DiffBlock[] = [];
+  let deletedCount = 0;
+
+  for (const cue of sourceCues) {
+    let content = cue.content;
 
     if (options.customRules && customRules.length > 0)
       content = applyCustomRules(content, customRules);
 
-    if (options.notation)
-      for (const rule of notationRules)
-        content = content.replace(rule.pattern, rule.replacement);
+    if (options.notation) {
+      content = replaceOutsideURLs(content, (seg) => {
+        for (const rule of notationRules) {
+          // 文字列置換と関数置換の両対応（TypeScriptのオーバーロード解決のため分岐）
+          seg = typeof rule.replacement === "string"
+            ? seg.replace(rule.pattern, rule.replacement)
+            : seg.replace(rule.pattern, rule.replacement);
+        }
+        return seg;
+      });
+    }
 
-    if (options.filler)
-      content = content.replace(fillerPattern, "");
+    content = removeFillers(content, lang, options.fillerMode);
 
     if (options.linebreak) {
       content = lineBreakFn(content, options.linebreakChars);
@@ -231,78 +442,34 @@ export function cleanSRT(
       .replace(/\n{3,}/g, "\n")
       .trim();
 
-    return { ...block, content };
-  });
-
-  // 最大行数制限：超えた分は新ブロックに分割
-  const finalBlocks: SRTBlock[] = [];
-  let indexOffset = 0;
-  for (const block of cleaned) {
-    const lines = block.content.split("\n");
-    if (options.maxLines > 0 && lines.length > options.maxLines) {
-      // チャンクに分割
-      for (let i = 0; i < lines.length; i += options.maxLines) {
-        const chunk = lines.slice(i, i + options.maxLines).join("\n");
-        const newIndex = indexOffset === 0
-          ? block.index
-          : `${block.index}-${indexOffset + 1}`;
-        finalBlocks.push({ index: newIndex, timecode: block.timecode, content: chunk });
-        indexOffset++;
-      }
-      indexOffset = 0;
-    } else {
-      finalBlocks.push(block);
-    }
-  }
-
-  return blocksToSRT(finalBlocks);
-}
-
-// ==========================================
-// 差分生成
-// ==========================================
-
-export function buildDiff(original: string, cleaned: string): DiffBlock[] {
-  const origBlocks  = parseSRT(original);
-  const cleanBlocks = parseSRT(cleaned);
-
-  // 元のインデックスでMapを作成
-  const origMap = new Map<string, SRTBlock>();
-  for (const b of origBlocks) {
-    origMap.set(b.index, b);
-  }
-
-  const result: DiffBlock[] = [];
-
-  for (const clean of cleanBlocks) {
-    // 分割されたブロック（例: "876-2"）は元のベースインデックスを探す
-    const baseIndex = clean.index.split("-")[0];
-    const orig = origMap.get(clean.index) ?? origMap.get(baseIndex);
-
-    if (orig) {
-      // 元ブロックと比較
-      const before = orig.content;
-      const after  = clean.content;
-      result.push({
-        index:    clean.index,
-        timecode: clean.timecode,
-        before,
-        after,
-        changed: before !== after,
+    // 整形の結果、中身が空になったブロックは削除し、差分に「削除」として記録する
+    if (!content) {
+      deletedCount++;
+      blocks.push({
+        index: outCues.length + 1,
+        timecode: timecodeOf(cue, format),
+        before: cue.content,
+        after: "",
+        kind: "deleted",
       });
-    } else {
-      // 元に存在しない新規ブロック（分割で増えた）
-      result.push({
-        index:    clean.index,
-        timecode: clean.timecode,
-        before:   "",
-        after:    clean.content,
-        changed:  true,
-      });
+      continue;
     }
+
+    // 最大行数を超えるブロックはタイムコードを比例配分しつつ分割
+    const parts = splitCueByMaxLines({ ...cue, content }, options.maxLines);
+    parts.forEach((p, j) => {
+      outCues.push(p);
+      blocks.push({
+        index: outCues.length,
+        timecode: timecodeOf(p, format),
+        before: j === 0 ? cue.content : "",
+        after: p.content,
+        kind: j > 0 ? "split" : p.content === cue.content ? "unchanged" : "changed",
+      });
+    });
   }
 
-  return result;
+  return { cues: outCues, blocks, deletedCount, text: cuesToText(outCues, format) };
 }
 
 // ==========================================
@@ -340,6 +507,25 @@ export function createRule(from: string, to: string): CustomRule {
 }
 
 // ==========================================
+// ファイル読み込み（文字コード自動判定）
+// ==========================================
+
+// UTF-16 BOM → UTF-8（不正バイトで例外を出すfatalモード）→ Shift_JIS の順に判定する。
+// UTF-16はShift_JISとして「読めてしまう」ことがあるため、必ずBOMチェックを最初に行う
+export function decodeSubtitleFile(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  if (bytes.length >= 2) {
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(buf);
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(buf);
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder("shift_jis").decode(buf);
+  }
+}
+
+// ==========================================
 // UI テキスト（言語別）
 // ==========================================
 
@@ -348,8 +534,8 @@ export const UI = {
     brandSub:      "字幕ファイルを整形・最適化",
     toClean:       "整形画面へ",
     toRules:       "カスタムルールを作成する",
-    dropTitle:     "SRTファイルをドラッグ＆ドロップ",
-    dropSub:       "またはクリックして選択 · .srt / .txt",
+    dropTitle:     "SRT / VTT ファイルをドラッグ＆ドロップ",
+    dropSub:       "またはクリックして選択 · .srt / .vtt / .txt",
     dropChange:    "クリックまたはドロップで変更",
     sample:        "サンプルで試す",
     optLabel:      "処理オプション",
@@ -359,6 +545,10 @@ export const UI = {
       linebreak:   { label: "改行最適化",     desc: "長い行を分割" },
       customRules: { label: "カスタムルール", desc: "" },
     },
+    fillerStandard:     "標準",
+    fillerStrong:       "強力",
+    fillerStandardDesc: "um, uh など確実なフィラーのみ",
+    fillerStrongDesc:   "like, so, actually なども削除（意味が変わることがあります）",
     cleanBtn:      "整形する",
     recleanMsg:    "整形完了 — オプションやルールを変えて再整形できます",
     recleanBtn:    "再整形する",
@@ -367,21 +557,24 @@ export const UI = {
     tabOutput:     "整形後",
     tabInput:      "元テキスト",
     changed:       "件変更",
+    deletedMsg:    (n: number) => `${n}件のブロックが空になったため削除しました`,
     download:      "ダウンロード",
     diffBefore:    "変更前",
     diffAfter:     "変更後",
     diffChanged:   "変更",
+    diffSplit:     "分割ブロック",
+    diffDeleted:   "削除",
     rulesTitle:    "カスタム置換ルール",
     rulesDesc:     "独自のルールを登録できます。ブラウザに保存され、次回以降も自動で適用されます。",
     exampleLabel:  "設定例：",
-    footer:        "処理はすべてブラウザ内で完結 · SRTファイルはサーバーに送信されません",
+    footer:        "処理はすべてブラウザ内で完結 · 字幕ファイルはサーバーに送信されません",
   },
   en: {
     brandSub:      "Clean & format subtitle files",
     toClean:       "Back to Clean",
     toRules:       "Custom Rules",
-    dropTitle:     "Drop your SRT file here",
-    dropSub:       "or click to select · .srt / .txt",
+    dropTitle:     "Drop your SRT / VTT file here",
+    dropSub:       "or click to select · .srt / .vtt / .txt",
     dropChange:    "Click or drop to change file",
     sample:        "Try a sample",
     optLabel:      "Options",
@@ -391,7 +584,11 @@ export const UI = {
       linebreak:   { label: "Line breaks",    desc: "Split long lines" },
       customRules: { label: "Custom rules",   desc: "" },
     },
-    cleanBtn:      "Clean SRT",
+    fillerStandard:     "Standard",
+    fillerStrong:       "Strong",
+    fillerStandardDesc: "Only clear fillers: um, uh, er…",
+    fillerStrongDesc:   "Also like, so, actually… (may change meaning)",
+    cleanBtn:      "Clean Subtitles",
     recleanMsg:    "Done — change options or rules and re-clean",
     recleanBtn:    "Re-clean",
     resetBtn:      "Reset",
@@ -399,10 +596,13 @@ export const UI = {
     tabOutput:     "Output",
     tabInput:      "Original",
     changed:       " changes",
+    deletedMsg:    (n: number) => `${n} block${n > 1 ? "s" : ""} became empty and ${n > 1 ? "were" : "was"} removed`,
     download:      "Download",
     diffBefore:    "Before",
     diffAfter:     "After",
     diffChanged:   "Changed",
+    diffSplit:     "Split block",
+    diffDeleted:   "Deleted",
     rulesTitle:    "Custom Replace Rules",
     rulesDesc:     "Save your own rules. They are stored in your browser and applied automatically.",
     exampleLabel:  "Examples:",

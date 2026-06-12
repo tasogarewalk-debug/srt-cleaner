@@ -2,10 +2,26 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
-  cleanSRT, buildDiff, loadRules, saveRules, loadLang, saveLang,
-  CustomRule, CleanOptions, DiffBlock, Lang, UI,
+  cleanSubtitles, decodeSubtitleFile, detectFormat, normalizeText,
+  loadRules, saveRules, loadLang, saveLang,
+  CustomRule, CleanOptions, DiffBlock, FillerMode, Lang, SubFormat, UI,
 } from "@/lib/srt";
 import RuleManager from "./components/RuleManager";
+
+// GA4イベント送信（gtag未読み込みの環境では何もしない）
+function track(name: string, params?: Record<string, unknown>) {
+  const w = window as unknown as { gtag?: (...args: unknown[]) => void };
+  if (typeof w.gtag === "function") w.gtag("event", name, params ?? {});
+}
+
+// A8提携承認後にURLを設定すると表示されるアフィリエイト枠（空の間は非表示）
+const AFFILIATE = {
+  url: "",
+  label: {
+    ja: "🎬 動画編集をもっと効率化",
+    en: "🎬 Level up your video editing",
+  },
+};
 
 const SAMPLE_SRT_JA = `1
 00:00:01,000 --> 00:00:04,000
@@ -77,9 +93,11 @@ export default function Home() {
   const [fileName, setFileName]   = useState("");
   const [processed, setProcessed] = useState(false);
   const [lang, setLang]           = useState<Lang>("en");
+  const [format, setFormat]       = useState<SubFormat>("srt");
+  const [deletedCount, setDeletedCount] = useState(0);
   const [customRules, setCustomRules] = useState<CustomRule[]>([]);
   const [options, setOptions] = useState<CleanOptions>({
-    notation: true, filler: true, linebreak: true, customRules: false,
+    notation: true, fillerMode: "standard", linebreak: true, customRules: false,
     linebreakChars: 42,
     maxLines: 0,
   });
@@ -115,12 +133,13 @@ export default function Home() {
 
   const handleFile = (file: File) => {
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setInput(e.target?.result as string);
+    // 文字コード自動判定（UTF-16 BOM→UTF-8→Shift_JIS）と改行正規化をかけてから読み込む
+    file.arrayBuffer().then((buf) => {
+      const text = normalizeText(decodeSubtitleFile(buf));
+      setFormat(detectFormat(text, file.name));
+      setInput(text);
       setProcessed(false); setOutput(""); setDiff([]);
-    };
-    reader.readAsText(file, "UTF-8");
+    });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -130,20 +149,16 @@ export default function Home() {
     if (file) handleFile(file);
   }, []);
 
+  // 整形・再整形は同じ処理（出力と差分を同じ結果オブジェクトから取る）
   const handleClean = () => {
     if (!input.trim()) return;
-    setOutput(""); setDiff([]);
-    const result = cleanSRT(input, options, customRules, lang);
-    setOutput(result); setDiff(buildDiff(input, result));
+    const res = cleanSubtitles(input, options, customRules, lang, format);
+    setOutput(res.text); setDiff(res.blocks); setDeletedCount(res.deletedCount);
     setProcessed(true); setTab("diff"); setDiffLimit(100);
+    track("clean_subtitles", { lang, format, blocks: res.blocks.length });
   };
 
-  const handleReclean = () => {
-    if (!input.trim()) return;
-    setOutput(""); setDiff([]);
-    const result = cleanSRT(input, options, customRules, lang);
-    setOutput(result); setDiff(buildDiff(input, result)); setTab("diff"); setDiffLimit(100);
-  };
+  const handleReclean = handleClean;
 
   const handleReset = () => {
     setOutput(""); setDiff([]); setProcessed(false);
@@ -151,16 +166,20 @@ export default function Home() {
   };
 
   const handleDownload = () => {
-    const blob = new Blob([output], { type: "text/plain;charset=utf-8" });
+    const mime = format === "vtt" ? "text/vtt" : "text/plain";
+    const blob = new Blob([output], { type: `${mime};charset=utf-8` });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = fileName ? fileName.replace(/\.srt$/i, "_cleaned.srt") : "cleaned.srt";
+    // 入力と同じフォーマットの拡張子でダウンロードする
+    const base = fileName ? fileName.replace(/\.(srt|vtt|txt)$/i, "") : "cleaned";
+    a.download = `${base}_cleaned.${format}`;
     a.click(); URL.revokeObjectURL(url);
+    track("download_subtitles", { format });
   };
 
-  const changedCount  = diff.filter(d => d.changed).length;
-  const filteredDiff  = showChangedOnly ? diff.filter(d => d.changed) : diff;
+  const changedCount  = diff.filter(d => d.kind !== "unchanged").length;
+  const filteredDiff  = showChangedOnly ? diff.filter(d => d.kind !== "unchanged") : diff;
   const visibleDiff   = filteredDiff.slice(0, diffLimit);
   const hasMore       = filteredDiff.length > diffLimit;
   const blockCount   = input.split(/\n\n+/).filter(Boolean).length;
@@ -229,7 +248,7 @@ export default function Home() {
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
               onClick={() => fileInputRef.current?.click()}>
-              <input ref={fileInputRef} type="file" accept=".srt,.txt"
+              <input ref={fileInputRef} type="file" accept=".srt,.vtt,.txt"
                 style={{ display:"none" }}
                 onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
               {input ? (
@@ -255,7 +274,7 @@ export default function Home() {
                 <button style={s.ghostBtn}
                   onClick={() => {
                     const sample = lang === "en" ? SAMPLE_SRT_EN : SAMPLE_SRT_JA;
-                    setInput(sample); setFileName("sample.srt"); setProcessed(false);
+                    setInput(sample); setFileName("sample.srt"); setFormat("srt"); setProcessed(false);
                   }}>
                   {t.sample}
                 </button>
@@ -268,7 +287,8 @@ export default function Home() {
               <div style={{ ...s.optGrid, gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr" }}>
                 {(["notation","filler","linebreak","customRules"] as const).map(key => {
                   const opt = t.opts[key];
-                  const on = options[key];
+                  // フィラーはoff⇔standardのトグル（強弱はON時に下のセグメントで選ぶ）
+                  const on = key === "filler" ? options.fillerMode !== "off" : options[key];
                   const desc = key === "customRules"
                     ? (lang === "ja" ? `${enabledRuleCount}件有効` : `${enabledRuleCount} active`)
                     : key === "linebreak"
@@ -276,7 +296,11 @@ export default function Home() {
                     : opt.desc;
                   return (
                     <div key={key} style={s.optItem}
-                      onClick={() => setOptions(o => ({ ...o, [key]: !o[key] }))}>
+                      onClick={() => setOptions(o => (
+                        key === "filler"
+                          ? { ...o, fillerMode: o.fillerMode === "off" ? "standard" : "off" }
+                          : { ...o, [key]: !o[key] }
+                      ))}>
                       <div style={{ width:40, height:22, borderRadius:11, flexShrink:0,
                         background: on ? "#2b6cb0" : "#d1d5db",
                         position:"relative", transition:"background 0.2s", cursor:"pointer" }}>
@@ -292,6 +316,26 @@ export default function Home() {
                   );
                 })}
               </div>
+
+              {/* フィラー削除ON＋英語のときだけ強度セレクタをネスト表示 */}
+              {options.fillerMode !== "off" && lang === "en" && (
+                <div style={{ marginTop:10, padding:"10px 14px", background:"var(--bg)", border:"1.5px solid var(--border)", borderRadius:"var(--radius-sm)", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                  <div style={{ display:"flex", background:"var(--border)", borderRadius:8, padding:2, gap:2 }}>
+                    {(["standard","strong"] as FillerMode[]).map(m => (
+                      <button key={m} onClick={() => setOptions(o => ({ ...o, fillerMode: m }))}
+                        style={{ fontSize:11, fontWeight:600, padding:"5px 14px", borderRadius:6, border:"none", cursor:"pointer", transition:"all 0.15s",
+                          background: options.fillerMode === m ? "#fff" : "transparent",
+                          color: options.fillerMode === m ? "#2b6cb0" : "var(--text-3)",
+                          boxShadow: options.fillerMode === m ? "0 1px 4px rgba(0,0,0,0.12)" : "none" }}>
+                        {m === "standard" ? t.fillerStandard : t.fillerStrong}
+                      </button>
+                    ))}
+                  </div>
+                  <span style={{ fontSize:11, color:"var(--text-3)", flex:1, minWidth:180 }}>
+                    {options.fillerMode === "strong" ? t.fillerStrongDesc : t.fillerStandardDesc}
+                  </span>
+                </div>
+              )}
             </div>
 
 
@@ -409,6 +453,7 @@ export default function Home() {
                         {lang === "ja"
                           ? `全${diff.length}ブロック中 ${changedCount}件変更`
                           : `${changedCount} of ${diff.length} blocks changed`}
+                        {deletedCount > 0 && ` · ${t.deletedMsg(deletedCount)}`}
                       </span>
                       {/* セグメントコントロール */}
                       <div style={{ display:"flex", background:"var(--border)", borderRadius:8, padding:2, gap:2 }}>
@@ -431,21 +476,23 @@ export default function Home() {
                       </div>
                     </div>
                     {visibleDiff.map((d, i) => (
-                      <div key={i} style={diffCardStyle(d.changed)}>
+                      <div key={i} style={diffCardStyle(d.kind !== "unchanged")}>
                         <div style={s.diffMeta}>
                           <span style={s.diffIdx}>#{d.index}</span>
                           <span style={s.diffTime}>{d.timecode}</span>
-                          {d.changed && <span style={s.diffBadge}>{t.diffChanged}</span>}
+                          {d.kind !== "unchanged" && (
+                            <span style={d.kind === "deleted" ? { ...s.diffBadge, color:"var(--red)", background:"var(--red-bg)" } : s.diffBadge}>
+                              {d.kind === "deleted" ? t.diffDeleted : d.kind === "split" ? t.diffSplit : t.diffChanged}
+                            </span>
+                          )}
                         </div>
-                        {d.changed && d.before === "" ? (
+                        {d.kind === "deleted" ? (
+                          // 整形で中身が空になり削除されたブロック
+                          <div style={{ ...s.diffText, color:"var(--red)", background:"var(--red-bg)", borderRadius:6, padding:"8px 10px", textDecoration:"line-through" }}>{d.before}</div>
+                        ) : d.kind === "split" ? (
                           // 最大行数分割で新規追加されたブロック
-                          <div>
-                            <div style={{ fontSize:10, fontWeight:700, color:"#2b6cb0", background:"#ebf4ff", borderRadius:4, padding:"2px 8px", display:"inline-block", marginBottom:6 }}>
-                              {lang === "ja" ? "分割ブロック" : "Split block"}
-                            </div>
-                            <div style={{ ...s.diffText, color:"var(--teal-dark)", background:"var(--teal-bg)", borderRadius:6, padding:"8px 10px" }}>{d.after}</div>
-                          </div>
-                        ) : d.changed ? (
+                          <div style={{ ...s.diffText, color:"var(--teal-dark)", background:"var(--teal-bg)", borderRadius:6, padding:"8px 10px" }}>{d.after}</div>
+                        ) : d.kind === "changed" ? (
                           <div style={s.diffCols}>
                             <div style={s.diffCol}>
                               <div style={{ ...s.diffLabel, color:"var(--red)" }}>{t.diffBefore}</div>
@@ -478,6 +525,18 @@ export default function Home() {
                 )}
               </div>
             )}
+
+            {/* アフィリエイト枠: タスク完了後の位置にテキストリンクで表示（URL未設定の間は出ない） */}
+            {processed && AFFILIATE.url && (
+              <div style={{ textAlign:"center", padding:"14px 20px", background:"#fff", border:"1.5px solid var(--border)", borderRadius:"var(--radius)", boxShadow:"var(--shadow)", fontSize:13 }}>
+                <span style={{ fontSize:10, fontWeight:700, color:"var(--text-3)", border:"1px solid var(--border-2)", borderRadius:4, padding:"1px 6px", marginRight:8 }}>PR</span>
+                <a href={AFFILIATE.url} target="_blank" rel="nofollow noopener"
+                  onClick={() => track("affiliate_click", { placement: "after_result" })}
+                  style={{ color:"#2b6cb0", fontWeight:700, textDecoration:"none" }}>
+                  {AFFILIATE.label[lang]}
+                </a>
+              </div>
+            )}
           </div>
         )}
 
@@ -492,6 +551,11 @@ export default function Home() {
           target="_blank" rel="noopener noreferrer"
           style={{ color:"#2b6cb0", fontWeight:600, textDecoration:"none", fontSize:11 }}>
           {lang === "ja" ? "@negitoroedamame" : "@Matsuya_dev"}
+        </a>
+        <span style={{ color:"var(--border-2)" }}>·</span>
+        <a href="/privacy"
+          style={{ color:"var(--text-3)", textDecoration:"none", fontSize:11 }}>
+          {lang === "ja" ? "プライバシー・広告について" : "Privacy & Ads"}
         </a>
       </footer>
     </div>

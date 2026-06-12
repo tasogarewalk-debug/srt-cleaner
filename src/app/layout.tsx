@@ -3,8 +3,8 @@ import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SRT Cleaner — Clean & Format Subtitle Files",
-  description: "Fix typos, remove filler words, and optimize line breaks in your SRT subtitle files. Free, browser-based, no login required.",
+  title: "SRT Cleaner — Clean & Format SRT / VTT Subtitle Files",
+  description: "Fix typos, remove filler words, and optimize line breaks in your SRT / VTT subtitle files. Free, browser-based, no login required.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
