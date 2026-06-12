@@ -165,6 +165,10 @@ const optNot: CleanOptions = { ...OPT_OFF, notation: true };
   // 空白だけの区切り行でもブロック分割される
   const dirty = "1\n00:00:01,000 --> 00:00:02,000\nhello\n \n2\n00:00:03,000 --> 00:00:04,000\nworld";
   assert("空白入り空行: 2キューに分割", parseCues(dirty, "srt").length === 2, parseCues(dirty, "srt"));
+  // キュー本文の途中に空白のみ行があってもテキストが消えない（直前キューに連結）
+  const midBlank = "1\n00:00:01,000 --> 00:00:02,000\n1行目\n \n2行目つづき";
+  const mb = parseCues(midBlank, "srt");
+  assert("本文中の空白行: テキスト消失なし", mb.length === 1 && mb[0].content.includes("2行目つづき"), mb);
   // カスタムルールの置換先で$&が特殊解釈されない
   const dollarRule = { id: "x", from: "yen", to: "$&100", enabled: true, createdAt: 0 };
   const res = cleanSubtitles("1\n00:00:01,000 --> 00:00:02,000\n100 yen", { ...OPT_OFF, customRules: true }, [dollarRule], "en", "srt");

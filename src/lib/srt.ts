@@ -116,7 +116,13 @@ export function parseCues(raw: string, format: SubFormat): Cue[] {
 
     // 「-->」を含む行をタイムコード行とみなす（VTTはキューID省略可のため行位置で判定しない）
     const tcIdx = lines.findIndex((l) => l.includes("-->"));
-    if (tcIdx === -1) continue;
+    if (tcIdx === -1) {
+      // タイムコードのないブロックは、本文中の空白のみ行で分断された直前キューの続きとみなして連結する
+      // （黙って捨てるとユーザーが気づかないままテキストが消えるため）
+      const tail = block.trim();
+      if (tail && cues.length > 0) cues[cues.length - 1].content += "\n" + tail;
+      continue;
+    }
 
     const [startPart, endPart] = lines[tcIdx].split("-->");
     const startMs = parseTime(startPart);
